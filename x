@@ -39,15 +39,16 @@ def api_call(endpoint, data=None):
     """Make API call to server."""
     url = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}{endpoint}"
 
-    if data is None:
-        data = {}
+    # data=None means GET request
+    # data={} or data={...} means POST request
+    is_post = data is not None
 
     try:
         req = urllib.request.Request(
             url,
-            data=json.dumps(data).encode() if data is not None else None,
+            data=json.dumps(data).encode() if is_post else None,
             headers={"Content-Type": "application/json"},
-            method="POST" if data is not None else "GET"
+            method="POST" if is_post else "GET"
         )
 
         with urllib.request.urlopen(req, timeout=300) as response:
