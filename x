@@ -45,9 +45,9 @@ def api_call(endpoint, data=None):
     try:
         req = urllib.request.Request(
             url,
-            data=json.dumps(data).encode() if data else None,
+            data=json.dumps(data).encode() if data is not None else None,
             headers={"Content-Type": "application/json"},
-            method="POST" if data else "GET"
+            method="POST" if data is not None else "GET"
         )
 
         with urllib.request.urlopen(req, timeout=300) as response:
