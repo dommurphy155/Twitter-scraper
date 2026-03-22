@@ -13,9 +13,11 @@ venv/
 env/
 ENV/
 
-# Cookies (sensitive!)
+# Cookies and credentials (sensitive!)
 twitter_cookies.json
 *.cookies.json
+.twitter_config.json
+login_error.png
 
 # Storage (scraped data)
 storage/twitter/*.json

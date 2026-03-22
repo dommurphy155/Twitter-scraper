@@ -9,6 +9,7 @@ Usage:
     x tweet "<text>" [--reply-to <id>]
     x like <tweet_id>
     x delete <tweet_id>
+    x refresh                        # Manually refresh cookies
     x status                         # Check server status
 
 Examples:
@@ -19,6 +20,7 @@ Examples:
     x tweet "Replying..." --reply-to 1234567890
     x like 1234567890
     x delete 1234567890
+    x refresh                        # Force cookie refresh
 """
 
 import argparse
@@ -30,7 +32,7 @@ import urllib.error
 
 # Config - must match server
 DEFAULT_HOST = os.environ.get("TWITTER_SCRAPE_HOST", "127.0.0.1")
-DEFAULT_PORT = int(os.environ.get("TWITTER_SCRAPE_PORT", 8765))
+DEFAULT_PORT = int(os.environ.get("TWITTER_SCRAPE_PORT", "8765"))
 
 
 def api_call(endpoint, data=None):
@@ -74,7 +76,8 @@ def cmd_status(args=None):
     """Check server status."""
     result = api_call("/health", None)
     print(f"Server: {'OK' if result.get('status') == 'ok' else 'ERROR'}")
-    print(f"Cookies loaded: {result.get('cookies_loaded', False)}")
+    print(f"Cookies exist: {result.get('cookies_exist', False)}")
+    print(f"Cookies valid: {result.get('cookies_valid', False)}")
     print(f"Endpoint: {DEFAULT_HOST}:{DEFAULT_PORT}")
 
 
@@ -129,6 +132,13 @@ def cmd_delete(args):
     print("Success!")
 
 
+def cmd_refresh(args=None):
+    """Manually refresh cookies."""
+    print("Refreshing cookies...")
+    result = api_call("/refresh", {})
+    print(result.get('message', 'Done'))
+
+
 def cmd_help():
     """Show help."""
     print(__doc__)
@@ -144,6 +154,7 @@ Examples:
   x search "OpenAI lang:en"
   x search '"machine learning" min_faves:10' --product Top
   x tweet "Hello world!"
+  x refresh
   x status
         """
     )
@@ -177,6 +188,9 @@ Examples:
     delete_parser = subparsers.add_parser("delete", help="Delete your tweet")
     delete_parser.add_argument("tweet_id", help="Tweet ID")
 
+    # Refresh
+    subparsers.add_parser("refresh", help="Manually refresh cookies")
+
     # Help
     subparsers.add_parser("help", help="Show help")
 
@@ -194,6 +208,7 @@ Examples:
         "tweet": cmd_tweet,
         "like": cmd_like,
         "delete": cmd_delete,
+        "refresh": cmd_refresh,
     }
 
     handler = commands.get(args.command)
