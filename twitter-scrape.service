@@ -1,0 +1,17 @@
+[Unit]
+Description=Twitter Scraper API Server
+After=network.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/home/azureuser/.openclaw/skills/twitter_scrape
+Environment="TWITTER_COOKIES_PATH=/home/azureuser/.openclaw/skills/twitter_scrape/twitter_cookies.json"
+Environment="TWITTER_SCRAPE_HOST=127.0.0.1"
+Environment="TWITTER_SCRAPE_PORT=8765"
+ExecStart=/home/azureuser/.openclaw/skills/twitter_scrape/venv/bin/python /home/azureuser/.openclaw/skills/twitter_scrape/server.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
