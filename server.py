@@ -168,9 +168,10 @@ class TwitterHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _handle_with_retry(self, handler_func, data):
+    def _handle_with_retry(self, handler_func, data, operation_name="Operation"):
         """
         Execute handler with automatic cookie refresh on auth failure.
+        Shows: "cookies failed, refreshing... refreshed... posted."
         """
         # First, ensure cookies are valid
         if not asyncio.run(ensure_valid_cookies()):
@@ -182,6 +183,8 @@ class TwitterHandler(BaseHTTPRequestHandler):
         # Try the operation
         try:
             result = asyncio.run(handler_func(data))
+            # Add info that it succeeded on first try
+            result["_meta"] = {"refreshed": False, "message": f"{operation_name} successful"}
             self._send(*response(200, result))
         except TwitterAPIError as e:
             if e.status in [401, 403]:
@@ -190,6 +193,8 @@ class TwitterHandler(BaseHTTPRequestHandler):
                 if asyncio.run(ensure_valid_cookies()):
                     try:
                         result = asyncio.run(handler_func(data))
+                        # Add info that cookies were refreshed
+                        result["_meta"] = {"refreshed": True, "message": f"Cookies expired, refreshed, then {operation_name.lower()} successful"}
                         self._send(*response(200, result))
                         return
                     except TwitterAPIError as e2:

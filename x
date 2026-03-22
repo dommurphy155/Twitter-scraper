@@ -85,8 +85,14 @@ def cmd_user(args):
     """Scrape a user."""
     print(f"Fetching @{args.username}...")
     result = api_call("/user", {"username": args.username, "limit": args.limit})
-    print(f"Saved to: {result['path']}")
-    print(f"Tweets: {result['tweets_count']}")
+
+    # Show refresh status if cookies were refreshed
+    if result.get('_meta', {}).get('refreshed'):
+        print("  ⚠️  Cookies expired, refreshing...")
+        print("  ✓  Refreshed!")
+
+    print(f"✓ Saved to: {result['path']}")
+    print(f"  Tweets: {result['tweets_count']}")
 
 
 def cmd_search(args):
@@ -97,8 +103,14 @@ def cmd_search(args):
         "limit": args.limit,
         "product": args.product
     })
-    print(f"Found: {result['tweets_count']} tweets")
-    print(f"Saved to: {result['path']}")
+
+    # Show refresh status if cookies were refreshed
+    if result.get('_meta', {}).get('refreshed'):
+        print("  ⚠️  Cookies expired, refreshing...")
+        print("  ✓  Refreshed!")
+
+    print(f"✓ Found: {result['tweets_count']} tweets")
+    print(f"  Saved to: {result['path']}")
 
     # Show preview
     if result.get('tweets'):
@@ -114,22 +126,40 @@ def cmd_tweet(args):
     """Post a tweet."""
     print(f"Posting tweet...")
     result = api_call("/tweet", {"text": args.text, "reply_to": args.reply_to})
-    print(f"Success! Tweet ID: {result['tweet_id']}")
-    print(f"URL: {result['url']}")
+
+    # Show refresh status if cookies were refreshed
+    if result.get('_meta', {}).get('refreshed'):
+        print("  ⚠️  Cookies expired, refreshing...")
+        print("  ✓  Refreshed!")
+
+    print(f"✓ Posted! Tweet ID: {result['tweet_id']}")
+    print(f"  URL: {result['url']}")
 
 
 def cmd_like(args):
     """Like a tweet."""
     print(f"Liking tweet {args.tweet_id}...")
-    api_call("/like", {"tweet_id": args.tweet_id})
-    print("Success!")
+    result = api_call("/like", {"tweet_id": args.tweet_id})
+
+    # Show refresh status if cookies were refreshed
+    if result.get('_meta', {}).get('refreshed'):
+        print("  ⚠️  Cookies expired, refreshing...")
+        print("  ✓  Refreshed!")
+
+    print("✓ Liked!")
 
 
 def cmd_delete(args):
     """Delete a tweet."""
     print(f"Deleting tweet {args.tweet_id}...")
-    api_call("/delete", {"tweet_id": args.tweet_id})
-    print("Success!")
+    result = api_call("/delete", {"tweet_id": args.tweet_id})
+
+    # Show refresh status if cookies were refreshed
+    if result.get('_meta', {}).get('refreshed'):
+        print("  ⚠️  Cookies expired, refreshing...")
+        print("  ✓  Refreshed!")
+
+    print("✓ Deleted!")
 
 
 def cmd_refresh(args=None):
