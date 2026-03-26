@@ -6,6 +6,7 @@ Usage:
     x help                           # Show help
     x user <username> [--limit 200]  # Scrape user profile + tweets
     x search "<query>" [--limit 100] [--product Latest|Top]
+    x grok "<message>" [--conversation <id>]  # Chat with Grok
     x tweet "<text>" [--reply-to <id>]
     x like <tweet_id>
     x delete <tweet_id>
@@ -14,6 +15,8 @@ Usage:
 
 Examples:
     x user elonmusk --limit 50
+    x grok "What is 5x5?"
+    x grok "Tell me more" --conversation 12345
     x search "OpenAI lang:en" --limit 100
     x search '"machine learning" min_faves:10' --product Top
     x tweet "Hello from CLI!"
@@ -170,6 +173,32 @@ def cmd_refresh(args=None):
     print(result.get('message', 'Done'))
 
 
+def cmd_grok(args):
+    """Chat with Grok."""
+    conversation_id = args.conversation
+
+    # Send message (creates conversation automatically if needed)
+    print(f"Sending to Grok: {args.message}")
+    result = api_call("/grok/chat", {
+        "message": args.message,
+        "conversation_id": conversation_id
+    })
+
+    # Show refresh status if cookies were refreshed
+    if result.get('_meta', {}).get('refreshed'):
+        print("  ⚠️  Cookies expired, refreshing...")
+        print("  ✓  Refreshed!")
+
+    # Print response
+    grok_response = result.get('response', 'No response received')
+    print(f"\n🤖 Grok:\n{grok_response}")
+
+    # Show conversation ID for continuing
+    new_id = result.get('conversation_id')
+    if new_id and new_id != conversation_id:
+        print(f"\n--conversation {new_id}")
+
+
 def cmd_help():
     """Show help."""
     print(__doc__)
@@ -219,6 +248,11 @@ Examples:
     delete_parser = subparsers.add_parser("delete", help="Delete your tweet")
     delete_parser.add_argument("tweet_id", help="Tweet ID")
 
+    # Grok
+    grok_parser = subparsers.add_parser("grok", help="Chat with Grok")
+    grok_parser.add_argument("message", help="Message to send to Grok")
+    grok_parser.add_argument("--conversation", "-c", help="Continue existing conversation ID")
+
     # Refresh
     subparsers.add_parser("refresh", help="Manually refresh cookies")
 
@@ -236,6 +270,7 @@ Examples:
         "status": cmd_status,
         "user": cmd_user,
         "search": cmd_search,
+        "grok": cmd_grok,
         "tweet": cmd_tweet,
         "like": cmd_like,
         "delete": cmd_delete,

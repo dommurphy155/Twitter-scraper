@@ -7,6 +7,7 @@ A systemd-powered Twitter/X scraper with **automatic cookie refresh** that runs 
 - **Auto Cookie Refresh**: When cookies expire (403 error), the server automatically logs in via Playwright browser automation and extracts fresh cookies
 - **Global CLI**: `x` command works from any directory, any venv, system-wide
 - **Cloudflare Bypass**: Uses Chrome TLS fingerprint emulation via `rnet`
+- **Grok Chat**: Chat with Grok AI via `x grok "message"` (requires Chrome with remote debugging)
 - **Headless Operation**: Runs in background via systemd, auto-restarts on crash
 
 ---
@@ -151,6 +152,18 @@ x like 1234567890
 x delete 1234567890
 ```
 
+### Chat with Grok
+```bash
+x grok "What is 5x5?"                    # Send message to Grok
+x grok "Tell me more" --conversation 123  # Continue conversation
+```
+
+**Note:** Grok chat requires Chrome running with remote debugging enabled:
+```bash
+google-chrome --remote-debugging-port=9222
+# Make sure you're logged into x.com/i/grok in that Chrome instance
+```
+
 ### Refresh Cookies (Manual)
 ```bash
 x refresh             # Force re-login and cookie refresh
@@ -289,6 +302,7 @@ ChatGPT probably said you can't:
 | `403 Forbidden` | Cookies expired | Auto-refresh should handle it, or run `x refresh` |
 | `Verification required` | Suspicious login | Add `email` to config for 2FA handling |
 | `Browser not found` | Playwright not installed | Server will auto-install on first refresh |
+| `No Grok tab found` | Chrome not running with remote debug | Launch Chrome: `google-chrome --remote-debugging-port=9222` and open x.com/i/grok |
 
 ---
 

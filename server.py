@@ -152,6 +152,8 @@ class TwitterHandler(BaseHTTPRequestHandler):
             "/like": self._handle_like,
             "/delete": self._handle_delete,
             "/refresh": self._handle_refresh,
+            "/grok/conversation": self._handle_grok_conversation,
+            "/grok/chat": self._handle_grok_chat,
         }
 
         handler = handlers.get(self.path)
@@ -203,7 +205,7 @@ class TwitterHandler(BaseHTTPRequestHandler):
                 else:
                     self._send(*response(401, {"error": "Auth failed and refresh failed"}))
             else:
-                self._send(*response(e.status, {"error": str(e)}))
+                self._send(*response(int(e.status), {"error": str(e)}))
         except Exception as e:
             self._send(*response(500, {"error": str(e)}))
 
@@ -332,6 +334,135 @@ class TwitterHandler(BaseHTTPRequestHandler):
         client.load_cookies(str(COOKIES_PATH))
         await client.delete_tweet(tweet_id)
         return {"success": True}
+
+    def _handle_grok_conversation(self, data):
+        """Create a new Grok conversation - just returns the live tab conversation ID."""
+        try:
+            result = asyncio.run(self._do_grok_conversation(data))
+            self._send(*response(200, result))
+        except Exception as e:
+            self._send(*response(500, {"error": str(e)}))
+
+    async def _do_grok_conversation(self, data):
+        """Get conversation ID from the live Grok tab."""
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            context = browser.contexts[0]
+
+            page = None
+            for pg in context.pages:
+                if "x.com/i/grok" in pg.url:
+                    page = pg
+                    break
+
+            if not page:
+                raise Exception("No Grok tab found - open x.com/i/grok in Chrome")
+
+            url = page.url
+            conversation_id = None
+            if "conversation=" in url:
+                conversation_id = url.split("conversation=")[-1].split("&")[0]
+
+            return {"conversation_id": conversation_id, "url": url}
+
+    def _handle_grok_chat(self, data):
+        """Send message to Grok and get response."""
+        self._handle_with_retry(self._do_grok_chat, data, "Grok chat")
+
+    async def _do_grok_chat(self, data):
+        """Send message to Grok via the live browser tab."""
+        from playwright.async_api import async_playwright
+
+        message = data.get("message")
+        conversation_id = data.get("conversation_id")
+
+        if not message:
+            raise ValueError("message required")
+
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            context = browser.contexts[0]
+
+            # Always use the existing live Grok tab
+            page = None
+            for pg in context.pages:
+                if "x.com/i/grok" in pg.url:
+                    page = pg
+                    break
+
+            if not page:
+                raise Exception("No Grok tab found - open x.com/i/grok in Chrome")
+
+            # If a specific conversation requested and not already on it, navigate
+            if conversation_id and conversation_id not in page.url:
+                await page.goto(f"https://x.com/i/grok?conversation={conversation_id}")
+                await page.wait_for_load_state("networkidle")
+
+            # Get current conversation ID from URL
+            url = page.url
+            if "conversation=" in url:
+                conversation_id = url.split("conversation=")[-1].split("&")[0]
+
+            # Snapshot primaryColumn text before sending
+            before = await page.evaluate("""() => {
+                const col = document.querySelector('[data-testid="primaryColumn"]');
+                return col ? col.innerText.trim() : "";
+            }""")
+
+            # Type and send message
+            textarea = await page.wait_for_selector(
+                'textarea[placeholder="Ask anything"]',
+                timeout=15000
+            )
+            await textarea.click()
+            await textarea.fill(message)
+            await page.keyboard.press("Enter")
+
+            # Poll until primaryColumn text changes and stabilises
+            response_text = None
+            prev_text = before
+            stable_count = 0
+
+            for attempt in range(90):
+                await page.wait_for_timeout(1000)
+
+                current = await page.evaluate("""() => {
+                    const col = document.querySelector('[data-testid="primaryColumn"]');
+                    return col ? col.innerText.trim() : "";
+                }""")
+
+                if current != prev_text:
+                    stable_count = 0
+                    prev_text = current
+                elif current != before:
+                    # Text has changed from before and is now stable
+                    stable_count += 1
+                    if stable_count >= 2:
+                        # Extract just Grok's last reply
+                        # Split on our sent message to get everything after it
+                        parts = current.split(message)
+                        if len(parts) > 1:
+                            after = parts[-1].strip()
+                            # Remove follow-up suggestions etc by taking first block
+                            lines = [l for l in after.split("\n") if l.strip()]
+                            # Filter out UI chrome lines
+                            ui_noise = {"See new posts", "Ask about", "Copy", "Retry", "Like", "Dislike", "Think Harder", "Auto", "Search", "DeepSearch"}
+                            clean = []
+                            for line in lines:
+                                if any(line.startswith(n) for n in ui_noise):
+                                    break
+                                clean.append(line)
+                            response_text = "\n".join(clean).strip()
+                        else:
+                            response_text = current[len(before):].strip()
+                        break
+
+            return {
+                "conversation_id": conversation_id,
+                "response": response_text or "No response captured - try again",
+            }
 
     def _handle_refresh(self, data):
         """Manually trigger cookie refresh."""
