@@ -218,18 +218,16 @@ def cmd_grok(args):
     grok_response = result.get('response', 'No response received')
     print(f"\n🤖 Grok:\n{grok_response}")
 
-    # Show conversation ID and file path
-    new_id = result.get('conversation_id')
-    response_file = result.get('response_file')
+    # Show conversation ID and file path (ALWAYS)
+    new_id = result.get('conversation_id') or 'unknown'
+    response_file = result.get('response_file') or 'unknown'
     print()  # Blank line before metadata
-    if new_id:
-        print(f"--conversation {new_id}")
-    if response_file:
-        # Convert to ~/ shorthand
-        home = os.path.expanduser("~")
-        if response_file.startswith(home):
-            response_file = "~" + response_file[len(home):]
-        print(response_file)
+    print(f"--conversation {new_id}")
+    # Convert to ~/ shorthand
+    home = os.path.expanduser("~")
+    if response_file.startswith(home):
+        response_file = "~" + response_file[len(home):]
+    print(response_file)
 
 
 def cmd_help():

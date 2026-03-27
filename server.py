@@ -461,6 +461,7 @@ class TwitterHandler(BaseHTTPRequestHandler):
             response_text = None
             prev_text = before
             stable_count = 0
+            final_conversation_id = conversation_id  # Keep track of the ID we had
 
             for attempt in range(90):
                 await page.wait_for_timeout(1000)
@@ -496,6 +497,14 @@ class TwitterHandler(BaseHTTPRequestHandler):
                             response_text = current[len(before):].strip()
                         break
 
+            # Re-check the URL for the conversation ID (it may have been assigned for new chats)
+            final_url = page.url
+            if "conversation=" in final_url:
+                final_conversation_id = final_url.split("conversation=")[-1].split("&")[0]
+            elif final_conversation_id is None:
+                # Fallback: use a timestamp-based ID if we can't get it from URL
+                final_conversation_id = f"unknown_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
             # Save response to file
             grok_storage_dir = STORAGE_DIR.parent / "grok"
             grok_storage_dir.mkdir(parents=True, exist_ok=True)
@@ -507,7 +516,7 @@ class TwitterHandler(BaseHTTPRequestHandler):
             response_file.write_text(response_text or "No response captured - try again", encoding='utf-8')
 
             return {
-                "conversation_id": conversation_id,
+                "conversation_id": final_conversation_id,
                 "response": response_text or "No response captured - try again",
                 "response_file": str(response_file.resolve()),
                 "response_id": response_id,
