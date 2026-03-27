@@ -3,7 +3,8 @@
 Automatic cookie refresh for Twitter/X using Playwright.
 
 This module handles automatic re-authentication when cookies expire.
-It uses Playwright to launch a headless browser, log in, and extract fresh cookies.
+It first tries to pull cookies from an existing Chrome debug session,
+otherwise falls back to full browser automation login.
 """
 
 import asyncio
@@ -11,7 +12,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 # Config file for credentials (NOT in git)
 CONFIG_PATH = Path(__file__).parent / ".twitter_config.json"
@@ -50,12 +51,80 @@ def load_credentials() -> tuple[str, str]:
     return username, password, config.get("email")
 
 
-async def refresh_cookies(
+async def pull_cookies_from_chrome() -> Optional[List[Dict]]:
+    """
+    Try to pull auth cookies from an existing Chrome debug session.
+
+    Connects to Chrome on port 9222, looks for an x.com/home tab,
+    and extracts auth_token and ct0 cookies.
+
+    Returns:
+        List of cookie dicts if successful, None otherwise
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        print("[CookieRefresh] Playwright not installed")
+        return None
+
+    try:
+        async with async_playwright() as p:
+            print("[CookieRefresh] Connecting to Chrome on port 9222...")
+            try:
+                browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            except Exception as e:
+                print(f"[CookieRefresh] Could not connect to Chrome: {e}")
+                return None
+
+            context = browser.contexts[0]
+
+            # Look for x.com/home or x.com tab
+            page = None
+            for pg in context.pages:
+                if "x.com" in pg.url:
+                    page = pg
+                    print(f"[CookieRefresh] Found existing tab: {pg.url}")
+                    break
+
+            # If no x.com tab found, create one
+            if not page:
+                print("[CookieRefresh] No x.com tab found, creating new tab...")
+                page = await context.new_page()
+                await page.goto("https://x.com/home")
+                await page.wait_for_load_state("domcontentloaded")
+                # Give cookies a moment to load
+                await asyncio.sleep(1)
+
+            # Get cookies from the context
+            cookies = await context.cookies("https://x.com")
+
+            # Filter to just auth_token and ct0
+            auth_cookies = [
+                {"name": c["name"], "value": c["value"]}
+                for c in cookies
+                if c["name"] in ["auth_token", "ct0"]
+            ]
+
+            if len(auth_cookies) >= 2:
+                print(f"[CookieRefresh] Successfully pulled {len(auth_cookies)} cookies from Chrome")
+                return auth_cookies
+            else:
+                print(f"[CookieRefresh] Found {len(auth_cookies)} cookies, need full login")
+                return None
+
+    except Exception as e:
+        print(f"[CookieRefresh] Error pulling cookies from Chrome: {e}")
+        return None
+
+
+async def refresh_cookies_from_browser(
     headless: bool = True,
     timeout: int = 60
-) -> list[dict]:
+) -> List[Dict]:
     """
-    Refresh Twitter cookies using Playwright browser automation.
+    Refresh Twitter cookies using full browser automation login.
+
+    This is the fallback method when pulling from Chrome fails.
 
     Args:
         headless: Run browser in headless mode (no GUI)
@@ -89,7 +158,7 @@ async def refresh_cookies(
         try:
             # Go to login page
             print("[CookieRefresh] Navigating to login...")
-            await page.goto("https://x.com/i/flow/login", wait_until="networkidle")
+            await page.goto("https://x.com/i/flow/login", wait_until="domcontentloaded")
 
             # Wait for and fill username
             print("[CookieRefresh] Entering username...")
@@ -131,7 +200,7 @@ async def refresh_cookies(
                     raise CookieRefreshError("Login failed - unknown error")
 
             # Navigate to get all cookies
-            await page.goto("https://x.com", wait_until="networkidle")
+            await page.goto("https://x.com", wait_until="domcontentloaded")
             await asyncio.sleep(2)  # Wait for cookies to settle
 
             # Extract cookies
@@ -156,10 +225,6 @@ async def refresh_cookies(
 
             print(f"[CookieRefresh] Successfully extracted {len(auth_cookies)} cookies")
 
-            # Save to file
-            COOKIES_PATH.write_text(json.dumps(auth_cookies, indent=2))
-            print(f"[CookieRefresh] Cookies saved to {COOKIES_PATH}")
-
             return auth_cookies
 
         except PlaywrightTimeout as e:
@@ -175,9 +240,50 @@ async def refresh_cookies(
             await browser.close()
 
 
-def refresh_cookies_sync(headless: bool = True) -> list[dict]:
+async def refresh_cookies(
+    headless: bool = True,
+    timeout: int = 60,
+    prefer_chrome: bool = True
+) -> List[Dict]:
+    """
+    Refresh Twitter cookies using best available method.
+
+    First tries to pull from existing Chrome debug session (port 9222),
+    then falls back to full browser automation login.
+
+    Args:
+        headless: Run browser in headless mode when doing full login
+        timeout: Maximum time to wait for login (seconds)
+        prefer_chrome: Try pulling from Chrome first
+
+    Returns:
+        List of cookie dicts with 'name' and 'value' keys
+
+    Raises:
+        CookieRefreshError: If cookie refresh fails
+    """
+    # First try to pull from Chrome
+    if prefer_chrome:
+        chrome_cookies = await pull_cookies_from_chrome()
+        if chrome_cookies:
+            # Save to file
+            COOKIES_PATH.write_text(json.dumps(chrome_cookies, indent=2))
+            print(f"[CookieRefresh] Cookies saved to {COOKIES_PATH}")
+            return chrome_cookies
+
+    # Fall back to full browser login
+    auth_cookies = await refresh_cookies_from_browser(headless=headless, timeout=timeout)
+
+    # Save to file
+    COOKIES_PATH.write_text(json.dumps(auth_cookies, indent=2))
+    print(f"[CookieRefresh] Cookies saved to {COOKIES_PATH}")
+
+    return auth_cookies
+
+
+def refresh_cookies_sync(headless: bool = True, prefer_chrome: bool = True) -> List[Dict]:
     """Synchronous wrapper for refresh_cookies."""
-    return asyncio.run(refresh_cookies(headless=headless))
+    return asyncio.run(refresh_cookies(headless=headless, prefer_chrome=prefer_chrome))
 
 
 def needs_refresh() -> bool:
@@ -227,6 +333,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Refresh Twitter cookies")
     parser.add_argument("--visible", "-v", action="store_true", help="Show browser window")
     parser.add_argument("--test", "-t", action="store_true", help="Test current cookies")
+    parser.add_argument("--no-chrome", action="store_true", help="Skip Chrome connection, use full login")
     args = parser.parse_args()
 
     if args.test:
@@ -236,7 +343,10 @@ if __name__ == "__main__":
         sys.exit(0 if valid else 1)
 
     try:
-        cookies = asyncio.run(refresh_cookies(headless=not args.visible))
+        cookies = asyncio.run(refresh_cookies(
+            headless=not args.visible,
+            prefer_chrome=not args.no_chrome
+        ))
         print(f"\nSuccess! Got {len(cookies)} cookies")
         for c in cookies:
             print(f"  - {c['name']}: {'*' * 20}...")

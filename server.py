@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -30,7 +31,7 @@ import urllib.parse
 sys.path.insert(0, str(Path(__file__).parent))
 
 from rnet_twitter import RnetTwitterClient, TwitterAPIError
-from cookie_refresh import refresh_cookies, CookieRefreshError, COOKIES_PATH
+from cookie_refresh import refresh_cookies, pull_cookies_from_chrome, CookieRefreshError, COOKIES_PATH
 
 # Config
 HOST = os.environ.get("TWITTER_SCRAPE_HOST", "127.0.0.1")
@@ -89,7 +90,16 @@ async def ensure_valid_cookies():
     cookies_being_refreshed = True
     try:
         print("[Server] Starting automatic cookie refresh...")
-        await refresh_cookies(headless=True)
+
+        # First try to pull from Chrome CDP
+        chrome_cookies = await pull_cookies_from_chrome()
+        if chrome_cookies:
+            print("[Server] Cookies refreshed from Chrome CDP!")
+            return True
+
+        # Fall back to full browser login
+        print("[Server] Chrome pull failed, falling back to full browser login...")
+        await refresh_cookies(headless=True, prefer_chrome=False)
         print("[Server] Cookie refresh successful!")
         return True
     except CookieRefreshError as e:
@@ -358,7 +368,9 @@ class TwitterHandler(BaseHTTPRequestHandler):
                     break
 
             if not page:
-                raise Exception("No Grok tab found - open x.com/i/grok in Chrome")
+                page = await context.new_page()
+                await page.goto("https://x.com/i/grok")
+                await page.wait_for_load_state("domcontentloaded")
 
             url = page.url
             conversation_id = None
@@ -393,12 +405,14 @@ class TwitterHandler(BaseHTTPRequestHandler):
                     break
 
             if not page:
-                raise Exception("No Grok tab found - open x.com/i/grok in Chrome")
+                page = await context.new_page()
+                await page.goto("https://x.com/i/grok")
+                await page.wait_for_load_state("domcontentloaded")
 
             # If a specific conversation requested and not already on it, navigate
             if conversation_id and conversation_id not in page.url:
                 await page.goto(f"https://x.com/i/grok?conversation={conversation_id}")
-                await page.wait_for_load_state("networkidle")
+                await page.wait_for_load_state("domcontentloaded")
 
             # Get current conversation ID from URL
             url = page.url
@@ -459,21 +473,72 @@ class TwitterHandler(BaseHTTPRequestHandler):
                             response_text = current[len(before):].strip()
                         break
 
+            # Save response to file
+            grok_storage_dir = STORAGE_DIR.parent / "grok"
+            grok_storage_dir.mkdir(parents=True, exist_ok=True)
+
+            response_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            response_file = (grok_storage_dir / f"response_{response_id}.txt").resolve()
+
+            # Save just the Grok response
+            response_file.write_text(response_text or "No response captured - try again", encoding='utf-8')
+
             return {
                 "conversation_id": conversation_id,
                 "response": response_text or "No response captured - try again",
+                "response_file": str(response_file.resolve()),
+                "response_id": response_id,
             }
 
     def _handle_refresh(self, data):
-        """Manually trigger cookie refresh."""
+        """Manually trigger cookie refresh with detailed status."""
+        import io
+        import sys
+        from cookie_refresh import pull_cookies_from_chrome, refresh_cookies_from_browser
+
+        messages = []
+
+        def log(msg):
+            messages.append(msg)
+            print(f"[Refresh] {msg}")
+
         try:
-            success = asyncio.run(ensure_valid_cookies())
-            if success:
-                self._send(*response(200, {"success": True, "message": "Cookies refreshed"}))
-            else:
-                self._send(*response(500, {"error": "Refresh failed"}))
+            log("Checking for open x.com tab...")
+
+            # Try Chrome first
+            chrome_cookies = asyncio.run(pull_cookies_from_chrome())
+
+            if chrome_cookies:
+                log("Open tab found - pulling cookies now...")
+                log("Done!")
+                self._send(*response(200, {
+                    "success": True,
+                    "message": "Cookies refreshed",
+                    "source": "chrome",
+                    "details": messages
+                }))
+                return
+
+            log("No tab found - navigating to x.com...")
+
+            # Fall back to full login
+            cookies = asyncio.run(refresh_cookies_from_browser(headless=True))
+            log("Navigated")
+            log("Refresh done")
+
+            self._send(*response(200, {
+                "success": True,
+                "message": "Cookies refreshed",
+                "source": "browser_login",
+                "details": messages
+            }))
+
         except Exception as e:
-            self._send(*response(500, {"error": str(e)}))
+            log(f"Failed: {e}")
+            self._send(*response(500, {
+                "error": str(e),
+                "details": messages
+            }))
 
 
 def run_server():

@@ -11,6 +11,7 @@ Usage:
     x like <tweet_id>
     x delete <tweet_id>
     x refresh                        # Manually refresh cookies
+    x restart                        # Restart the twitter-scrape service
     x status                         # Check server status
 
 Examples:
@@ -24,6 +25,7 @@ Examples:
     x like 1234567890
     x delete 1234567890
     x refresh                        # Force cookie refresh
+    x restart                        # Restart service
 """
 
 import argparse
@@ -167,10 +169,33 @@ def cmd_delete(args):
 
 
 def cmd_refresh(args=None):
-    """Manually refresh cookies."""
-    print("Refreshing cookies...")
+    """Manually refresh cookies with detailed output."""
     result = api_call("/refresh", {})
-    print(result.get('message', 'Done'))
+
+    # Display detailed progress messages
+    if result.get('details'):
+        for msg in result['details']:
+            print(msg)
+    else:
+        print("Refreshing cookies...")
+
+    if not result.get('success'):
+        print(f"Failed: {result.get('error', 'Unknown error')}")
+
+
+def cmd_restart(args=None):
+    """Restart the twitter-scrape service."""
+    import subprocess
+    print("Restarting twitter-scrape service...")
+    try:
+        subprocess.run(["sudo", "systemctl", "restart", "twitter-scrape.service"], check=True)
+        print("✓ Service restarted successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to restart service: {e}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError:
+        print("Error: systemctl not found. Are you on a systemd system?", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_grok(args):
@@ -193,10 +218,18 @@ def cmd_grok(args):
     grok_response = result.get('response', 'No response received')
     print(f"\n🤖 Grok:\n{grok_response}")
 
-    # Show conversation ID for continuing
+    # Show conversation ID and file path
     new_id = result.get('conversation_id')
-    if new_id and new_id != conversation_id:
-        print(f"\n--conversation {new_id}")
+    response_file = result.get('response_file')
+    print()  # Blank line before metadata
+    if new_id:
+        print(f"--conversation {new_id}")
+    if response_file:
+        # Convert to ~/ shorthand
+        home = os.path.expanduser("~")
+        if response_file.startswith(home):
+            response_file = "~" + response_file[len(home):]
+        print(response_file)
 
 
 def cmd_help():
@@ -256,6 +289,9 @@ Examples:
     # Refresh
     subparsers.add_parser("refresh", help="Manually refresh cookies")
 
+    # Restart
+    subparsers.add_parser("restart", help="Restart the twitter-scrape service")
+
     # Help
     subparsers.add_parser("help", help="Show help")
 
@@ -275,6 +311,7 @@ Examples:
         "like": cmd_like,
         "delete": cmd_delete,
         "refresh": cmd_refresh,
+        "restart": cmd_restart,
     }
 
     handler = commands.get(args.command)
