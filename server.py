@@ -409,10 +409,33 @@ class TwitterHandler(BaseHTTPRequestHandler):
                 await page.goto("https://x.com/i/grok")
                 await page.wait_for_load_state("domcontentloaded")
 
-            # If a specific conversation requested and not already on it, navigate
-            if conversation_id and conversation_id not in page.url:
-                await page.goto(f"https://x.com/i/grok?conversation={conversation_id}")
-                await page.wait_for_load_state("domcontentloaded")
+            # Handle conversation navigation
+            if conversation_id:
+                # User specified a conversation ID - navigate to it if not already there
+                if conversation_id not in page.url:
+                    await page.goto(f"https://x.com/i/grok?conversation={conversation_id}")
+                    await page.wait_for_load_state("domcontentloaded")
+            else:
+                # No conversation ID - start a new chat
+                # Check if we're already on a clean /grok page (no conversation param)
+                current_url = page.url
+                has_conversation_param = "conversation=" in current_url
+
+                if has_conversation_param:
+                    # We're in an existing conversation, need to click "New Chat"
+                    try:
+                        # Look for the New Chat button by aria-label
+                        new_chat_btn = await page.wait_for_selector('button[aria-label="New Chat"]', timeout=5000)
+                        if new_chat_btn:
+                            await new_chat_btn.click()
+                            await page.wait_for_load_state("domcontentloaded")
+                            # Wait a moment for the navigation
+                            await asyncio.sleep(1)
+                    except:
+                        # Button not found or click failed, navigate directly
+                        await page.goto("https://x.com/i/grok")
+                        await page.wait_for_load_state("domcontentloaded")
+                # If we're on /i/grok without conversation param, we're already in a fresh chat
 
             # Get current conversation ID from URL
             url = page.url
