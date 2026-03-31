@@ -463,30 +463,37 @@ class TwitterHandler(BaseHTTPRequestHandler):
             stable_count = 0
             final_conversation_id = conversation_id  # Keep track of the ID we had
 
-            for attempt in range(90):
+            for attempt in range(180):
                 await page.wait_for_timeout(1000)
 
-                current = await page.evaluate("""() => {
+                data = await page.evaluate("""() => {
                     const col = document.querySelector('[data-testid="primaryColumn"]');
-                    return col ? col.innerText.trim() : "";
+                    const btns = [...document.querySelectorAll('button')];
+                    const hasCancel = btns.some(b => b.getAttribute('aria-label') === 'Cancel');
+                    const hasSend = btns.some(b => b.getAttribute('aria-label') === 'Enter voice mode');
+                    return {
+                        text: col ? col.innerText.trim() : "",
+                        generating: hasCancel,
+                        done: hasSend && !hasCancel,
+                    };
                 }""")
+
+                current = data["text"]
+                generating = data["generating"]
+                done_signal = data["done"]
 
                 if current != prev_text:
                     stable_count = 0
                     prev_text = current
-                elif current != before:
-                    # Text has changed from before and is now stable
+                elif done_signal and current != before:
+                    # Send button back, Cancel gone = fully done
                     stable_count += 1
                     if stable_count >= 2:
-                        # Extract just Grok's last reply
-                        # Split on our sent message to get everything after it
                         parts = current.split(message)
                         if len(parts) > 1:
                             after = parts[-1].strip()
-                            # Remove follow-up suggestions etc by taking first block
                             lines = [l for l in after.split("\n") if l.strip()]
-                            # Filter out UI chrome lines
-                            ui_noise = {"See new posts", "Ask about", "Copy", "Retry", "Like", "Dislike", "Think Harder", "Auto", "Search", "DeepSearch"}
+                            ui_noise = {"See new posts", "Ask about", "Copy", "Retry", "Like", "Dislike", "Think Harder", "Auto", "Search", "DeepSearch", "Quick Answer", "Detail", "Explore"}
                             clean = []
                             for line in lines:
                                 if any(line.startswith(n) for n in ui_noise):
