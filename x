@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Twitter/X CLI Client - talks to the twitter-scrape server.
+"""Twitter/X CLI Client - talks to the twitter-scrape server.
 
 Usage:
     x help                           # Show help
@@ -13,6 +12,7 @@ Usage:
     x refresh                        # Manually refresh cookies
     x restart                        # Restart the twitter-scrape service
     x status                         # Check server status
+    x account                        # Interactive account selector
 
 Examples:
     x user elonmusk --limit 50
@@ -26,6 +26,7 @@ Examples:
     x delete 1234567890
     x refresh                        # Force cookie refresh
     x restart                        # Restart service
+    x account                        # Switch accounts
 """
 
 import argparse
@@ -80,11 +81,33 @@ def api_call(endpoint, data=None):
 
 def cmd_status(args=None):
     """Check server status."""
+    # Get basic health
     result = api_call("/health", None)
     print(f"Server: {'OK' if result.get('status') == 'ok' else 'ERROR'}")
     print(f"Cookies exist: {result.get('cookies_exist', False)}")
     print(f"Cookies valid: {result.get('cookies_valid', False)}")
     print(f"Endpoint: {DEFAULT_HOST}:{DEFAULT_PORT}")
+
+    # Get account status
+    try:
+        account_result = api_call("/account/status", None)
+        current = account_result.get('current_account', 'unknown')
+        print(f"Account: {current}")
+
+        # Show all accounts
+        accounts = account_result.get('accounts', [])
+        if accounts:
+            print(f"\n  Accounts:")
+            for acc in accounts:
+                marker = "❯" if acc.get('is_current') else " "
+                status = acc.get('status', 'unknown')
+                if status == 'rate_limited':
+                    time_left = acc.get('time_until_available', '?')
+                    print(f"    {marker} {acc['username']} [rate limited — {time_left} remaining]")
+                else:
+                    print(f"    {marker} {acc['username']} [active]")
+    except Exception as e:
+        print(f"Account status: unavailable ({e})")
 
 
 def cmd_user(args):
@@ -214,6 +237,10 @@ def cmd_grok(args):
         print("  ⚠️  Cookies expired, refreshing...")
         print("  ✓  Refreshed!")
 
+    # Show account used (if multi-account)
+    if result.get('account'):
+        print(f"  Account: {result['account']}")
+
     # Print response
     grok_response = result.get('response', 'No response received')
     print(f"\n🤖 Grok:\n{grok_response}")
@@ -228,6 +255,84 @@ def cmd_grok(args):
     if response_file.startswith(home):
         response_file = "~" + response_file[len(home):]
     print(response_file)
+
+
+def cmd_account(args=None):
+    """Interactive account selector."""
+    # Get current account status
+    try:
+        result = api_call("/account/status", None)
+    except Exception as e:
+        print(f"Error: Could not get account status: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    accounts = result.get('accounts', [])
+    current = result.get('current_account')
+
+    if not accounts:
+        print("No accounts configured.")
+        print("Add ACCOUNT_N_USERNAME entries to .env file")
+        sys.exit(1)
+
+    # Build menu
+    print("\n  Select an account:")
+    print()
+
+    available_accounts = []
+    for i, acc in enumerate(accounts):
+        marker = "❯" if acc.get('is_current') else " "
+        status = acc.get('status', 'unknown')
+
+        if status == 'rate_limited':
+            time_left = acc.get('time_until_available', '?')
+            print(f"  {marker} {i+1}. {acc['username']} [rate limited — {time_left} remaining]")
+        else:
+            print(f"  {marker} {i+1}. {acc['username']} [active]")
+            available_accounts.append(acc['username'])
+
+    print()
+    print("  [Enter number to select, or Ctrl+C to cancel]")
+    print()
+
+    # Get user input
+    try:
+        choice = input("  Account: ").strip()
+    except KeyboardInterrupt:
+        print("\n  Cancelled.")
+        sys.exit(0)
+
+    # Validate choice
+    try:
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(accounts):
+            print("Invalid selection.", file=sys.stderr)
+            sys.exit(1)
+    except ValueError:
+        print("Please enter a number.", file=sys.stderr)
+        sys.exit(1)
+
+    selected_username = accounts[idx]['username']
+
+    # Check if rate limited
+    if selected_username not in available_accounts:
+        print(f"\n  ⚠️  {selected_username} is currently rate limited.")
+        print("  Try again later or select a different account.")
+        sys.exit(1)
+
+    # Perform switch
+    print(f"\n  Switching to {selected_username}...")
+    try:
+        result = api_call("/account/switch", {"username": selected_username})
+        if result.get('success'):
+            print(f"  ✓ Switched to {selected_username}")
+            print(f"  ✓ Session refreshed")
+            print(f"  ✓ Grok tab opened")
+        else:
+            print(f"  ✗ Switch failed: {result.get('error', 'Unknown error')}", file=sys.stderr)
+            sys.exit(1)
+    except Exception as e:
+        print(f"  ✗ Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_help():
@@ -247,6 +352,7 @@ Examples:
   x tweet "Hello world!"
   x refresh
   x status
+  x account
         """
     )
 
@@ -269,7 +375,7 @@ Examples:
     # Tweet
     tweet_parser = subparsers.add_parser("tweet", help="Post a tweet")
     tweet_parser.add_argument("text", help="Tweet text")
-    tweet_parser.add_argument("--reply-to", "-r", help="Reply to tweet ID")
+    tweet_parser.add_argument("--reply-to", "-r", help="Tweet ID to reply to")
 
     # Like
     like_parser = subparsers.add_parser("like", help="Like a tweet")
@@ -289,6 +395,9 @@ Examples:
 
     # Restart
     subparsers.add_parser("restart", help="Restart the twitter-scrape service")
+
+    # Account
+    subparsers.add_parser("account", help="Interactive account selector")
 
     # Help
     subparsers.add_parser("help", help="Show help")
@@ -310,6 +419,7 @@ Examples:
         "delete": cmd_delete,
         "refresh": cmd_refresh,
         "restart": cmd_restart,
+        "account": cmd_account,
     }
 
     handler = commands.get(args.command)
