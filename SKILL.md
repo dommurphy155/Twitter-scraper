@@ -1,10 +1,8 @@
-# Twitter Scraper
+# twitter-scrape
 
-Twitter/X GraphQL scraper + pain miner. Self-hosted, Cloudflare-bypass (rnet), auto-cookie-refresh via CDP, multi-account.
-
-**Server:** systemd `twitter-scraper.service` on `127.0.0.1:8765`
-**Restart:** `systemctl restart twitter-scraper`
-**Logs:** `journalctl -u twitter-scraper -f`
+Twitter/X GraphQL scraper + pain miner. Self-hosted, Cloudflare-bypass (rnet),
+auto-cookie-refresh via CDP, multi-account. No API keys — uses your Chrome
+session.
 
 ## Quick start
 
@@ -12,40 +10,79 @@ Twitter/X GraphQL scraper + pain miner. Self-hosted, Cloudflare-bypass (rnet), a
 x status                          # health check
 x user elonmusk 20                # scrape profile + tweets
 x search "OpenAI" 50              # keyword search
-x search "AI" --lang zh --min-followers 1000 --limit 10   # Chinese AI tweets from big accounts
-x search "startup" --location London --exclude-replies    # London founders
-x search "python" --verified --media-only 5               # verified accounts with media
-x pain "CRM" --lang en --min-likes 5                      # English CRM pain signals
+x pain "CRM" --lang en --min-likes 5   # mine customer pain signals
+x tweet "hello"                   # post
+x grok "what is 5x5"              # chat with Grok via CDP
 ```
 
-## Search filters (new in v4)
+## Setup (one of two paths)
 
-| Flag | Type | Detail |
+**Path A — one-liner:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/dommurphy155/Twitter-scraper/main/install.sh | bash
+```
+
+**Path B — manual:**
+```bash
+git clone https://github.com/dommurphy155/Twitter-scraper.git
+cd Twitter-scraper
+python3 scripts/setup_wizard.py      # venv, deps, Chrome, login, systemd
+```
+
+### What the user must do
+
+1. **Log into x.com.** Cookies are grabbed via CDP from your browser — no API key,
+   no password stored. If Chrome isn't logged in, the wizard opens the login
+   tab and waits.
+2. **Keep Chrome alive.** Session persists in `scripts/.chrome-profile/`.
+   Server re-attaches on boot; spawns headless Chromium if Chrome dies.
+3. **Accounts (optional):** edit `scripts/.env`:
+   ```
+   ACCOUNT_1_USERNAME=@yourhandle
+   ACCOUNT_2_USERNAME=@secondaccount
+   ```
+   For Grok rate-limit rotation.
+4. **Overrides:** `TWITTER_SCRAPE_HOST` / `TWITTER_SCRAPE_PORT` (default
+   `127.0.0.1:8765`). `TWITTER_SCRAPE_NO_AUTO_CHROME=1` disables auto-spawn.
+
+Verify: `x status` → should show `ready`.
+
+## Commands (`x`)
+
+| Command | What it does |
+|---|---|
+| `status` | Server, Chrome, cookie health |
+| `user <handle> [n]` | Scrape profile + tweets (max 200) |
+| `search "<q>" [n]` | Keyword search with filters |
+| `pain "<kw>" [n]` | Mine pain signals (WTP-scored) |
+| `tweet "<text>"` | Post a tweet |
+| `tweet-media "<text>" <file>` | Post with image/video |
+| `reply "<text>" <id>` | Reply to a tweet |
+| `like <id>` / `delete <id>` | Engage / delete |
+| `login` | Re-authenticate via browser |
+| `accounts` | Multi-account status |
+| `grok "<msg>"` | Chat with Grok via CDP |
+| `session` / `refresh` | Cookie re-grab |
+
+## Search filters
+
+Native (server-side): `--lang`, `--product Latest\|Top`, `--min-likes`,
+`--min-retweets`, `--verified`, `--media-only`, `--exclude-replies`,
+`--exclude-retweets`, `--since`, `--until`.
+
+Post-filter (fetches 3x then trims): `--min-followers`, `--location`.
+
+Limit syntax: `x search "q" 20` (positional) or `x search "q" --limit 20`.
+
+## HTTP API
+
+Default `http://127.0.0.1:8765` (override via env vars).
+
+| Method | Path | Body |
 |---|---|---|
-| `--lang CODE` | Native | ISO 639-1: en, zh, ja, ko, fr, de, es, ar, ru, pt |
-| `--product Latest\|Top` | Native | Sort order (default: Latest) |
-| `--min-likes N` | Native | Minimum favorites |
-| `--min-retweets N` | Native | Minimum retweets |
-| `--verified` | Native | Blue-check accounts only |
-| `--media-only` | Native | Tweets with images/video only |
-| `--exclude-replies` | Native | No reply tweets |
-| `--exclude-retweets` | Native | No retweets |
-| `--since YYYY-MM-DD` | Native | Date range start |
-| `--until YYYY-MM-DD` | Native | Date range end |
-| `--min-followers N` | Post-filter | Minimum author follower count |
-| `--location CITY` | Post-filter | Profile location substring match (case-insensitive) |
-
-Post-filters (`min-followers`, `location`) fetch 3x the requested count then filter down — Twitter GraphQL doesn't support these natively.
-
-**Limit syntax:** `x search "query" 20` (positional) or `x search "query" --limit 20` (flag). When mixing with other flags, use `--limit`.
-
-## Endpoints (HTTP API)
-
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/health` | Liveness + cookie status |
-| GET | `/session` | Re-grab live cookies from Chrome |
-| GET | `/account/status` | Per-account cooldown status |
+| GET | `/health` | — |
+| GET | `/session` | — |
+| GET | `/account/status` | — |
 | POST | `/user` | `{username, limit}` |
 | POST | `/search` | `{query, limit, product, lang?, min_faves?, min_retweets?, min_followers?, location?, since?, until?, exclude_replies?, exclude_retweets?, verified_only?, media_only?}` |
 | POST | `/tweet` | `{text, reply_to?, media_ids?}` |
@@ -53,21 +90,43 @@ Post-filters (`min-followers`, `location`) fetch 3x the requested count then fil
 | POST | `/like` | `{tweet_id}` |
 | POST | `/delete` | `{tweet_id}` |
 | POST | `/pain` | `{keyword, limit?, min_score?, lang?, min_faves?, min_retweets?, min_followers?, location?, since?, until?}` |
-| POST | `/refresh` | Force cookie re-grab |
-| POST | `/login` | Open login UI |
+| POST | `/refresh` | — |
+| POST | `/login` | — |
 | POST | `/account/switch` | `{username}` |
 
-Default: `http://127.0.0.1:8765`. Override with `TWITTER_SCRAPE_HOST` / `TWITTER_SCRAPE_PORT`.
+## Python SDK
+
+```python
+from twx import Twitter
+t = Twitter()
+t.search("I hate my CRM", limit=50)
+t.pain_mine("CRM", min_score=5)
+t.user("elonmusk", limit=20)
+t.tweet("hello world")
+t.healthy()
+```
 
 ## Files
 
-- `x` — CLI wrapper (v4, argparse-based, symlinked to `~/.local/bin/x`)
-- `twx.py` — Python SDK (`from twx import Twitter`)
-- `scripts/server.py` — HTTP API + self-healing cookie/session
-- `scripts/rnet_twitter.py` — Async GraphQL client (Cloudflare bypass via rnet)
-- `scripts/pain_miner.py` — Pain mining engine (18 query templates, 3-tier WTP scoring)
-- `scripts/cookie_refresh.py` — 3-tier auth: CDP grab → Playwright auto-login → login flow
-- `scripts/account_manager.py` — Multi-account state, round-robin, persistent cooldowns
-- `scripts/.env` — Account config (ACCOUNT_1_USERNAME=@handle)
-- `scripts/twitter_cookies.json` — Cached auth_token + ct0 (chmod 600)
-- `storage/twitter/` — Scraped data dumps
+- `install.sh` — one-line curl installer
+- `scripts/setup_wizard.py` — first-run: venv, deps, Chrome, login, systemd
+- `scripts/server.py` — HTTP API + self-healing cookies
+- `scripts/rnet_twitter.py` — async GraphQL (Cloudflare bypass via rnet)
+- `scripts/cookie_refresh.py` — 3-tier auth: CDP → Playwright → login flow
+- `scripts/account_manager.py` — multi-account state, round-robin, cooldowns
+- `scripts/pain_miner.py` — pain mining (18 templates, 3-tier WTP scoring)
+- `twx.py` — Python SDK
+- `x` — stdlib CLI (no deps)
+
+## Auth flow (never fails)
+
+1. Grab fresh cookies from live Chrome via CDP
+2. If Chrome down, spawn headless Chromium + re-auth
+3. If no credentials, return 401 with `POST /login` instruction — server never crashes
+
+## Service (Linux)
+
+```bash
+systemctl restart twitter-scrape
+journalctl -u twitter-scrape -f
+```

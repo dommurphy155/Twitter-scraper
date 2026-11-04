@@ -17,11 +17,11 @@ ENV/
 .env
 scripts/.env
 .twitter_config.json
-.twitter_config.example.json
 *.cookies.json
 scripts/twitter_cookies.json
 scripts/yt_cookies.json
 login_error.png
+# (.twitter_config.example.json IS committed — it is the empty template)
 
 # ── Browser profiles & runtime state ─────────────────────────────────
 scripts/.chrome-profile/
