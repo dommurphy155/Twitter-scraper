@@ -1,179 +1,73 @@
----
-name: twitter-scrape
-description: Scrape Twitter profiles and tweets via GraphQL, export to JSON or database
-homepage: https://canlah.ai
-metadata: {"openclaw": {"emoji": "🐦", "os": ["darwin", "linux"], "requires": {"bins": ["python3"], "env": ["TWITTER_COOKIES_PATH"]}}}
----
+# Twitter Scraper
 
-# Twitter/X Scraper Skill
+Twitter/X GraphQL scraper + pain miner. Self-hosted, Cloudflare-bypass (rnet), auto-cookie-refresh via CDP, multi-account.
 
-Scrape Twitter profiles and tweets using the `rnet_twitter.py` GraphQL client. Bypasses Cloudflare via TLS fingerprint emulation. Saves to local JSON and optionally imports to a database.
+**Server:** systemd `twitter-scraper.service` on `127.0.0.1:8765`
+**Restart:** `systemctl restart twitter-scraper`
+**Logs:** `journalctl -u twitter-scraper -f`
 
----
-
-## Prerequisites
+## Quick start
 
 ```bash
-# Install rnet (Rust HTTP client with Chrome TLS emulation)
-pip install "rnet>=3.0.0rc20" --pre
-
-# Required:
-# 1. rnet_twitter.py — async Twitter GraphQL client
-#    Get it: https://github.com/PHY041/rnet-twitter-client
-# 2. Twitter cookies file (set TWITTER_COOKIES_PATH env var)
-#    Format: [{"name": "auth_token", "value": "..."}, {"name": "ct0", "value": "..."}]
+x status                          # health check
+x user elonmusk 20                # scrape profile + tweets
+x search "OpenAI" 50              # keyword search
+x search "AI" --lang zh --min-followers 1000 --limit 10   # Chinese AI tweets from big accounts
+x search "startup" --location London --exclude-replies    # London founders
+x search "python" --verified --media-only 5               # verified accounts with media
+x pain "CRM" --lang en --min-likes 5                      # English CRM pain signals
 ```
 
-### Getting Cookies
+## Search filters (new in v4)
 
-1. Open Chrome -> go to `x.com` -> log in
-2. DevTools (F12) -> Application -> Cookies -> `https://x.com`
-3. Copy `auth_token` and `ct0` values
-4. Save to JSON file. Cookies expire ~2 weeks.
+| Flag | Type | Detail |
+|---|---|---|
+| `--lang CODE` | Native | ISO 639-1: en, zh, ja, ko, fr, de, es, ar, ru, pt |
+| `--product Latest\|Top` | Native | Sort order (default: Latest) |
+| `--min-likes N` | Native | Minimum favorites |
+| `--min-retweets N` | Native | Minimum retweets |
+| `--verified` | Native | Blue-check accounts only |
+| `--media-only` | Native | Tweets with images/video only |
+| `--exclude-replies` | Native | No reply tweets |
+| `--exclude-retweets` | Native | No retweets |
+| `--since YYYY-MM-DD` | Native | Date range start |
+| `--until YYYY-MM-DD` | Native | Date range end |
+| `--min-followers N` | Post-filter | Minimum author follower count |
+| `--location CITY` | Post-filter | Profile location substring match (case-insensitive) |
 
----
+Post-filters (`min-followers`, `location`) fetch 3x the requested count then filter down — Twitter GraphQL doesn't support these natively.
 
-## Quick Usage
+**Limit syntax:** `x search "query" 20` (positional) or `x search "query" --limit 20` (flag). When mixing with other flags, use `--limit`.
 
-### Scrape a Twitter User
+## Endpoints (HTTP API)
 
-```python
-import asyncio, json, os
-from rnet_twitter import RnetTwitterClient
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/health` | Liveness + cookie status |
+| GET | `/session` | Re-grab live cookies from Chrome |
+| GET | `/account/status` | Per-account cooldown status |
+| POST | `/user` | `{username, limit}` |
+| POST | `/search` | `{query, limit, product, lang?, min_faves?, min_retweets?, min_followers?, location?, since?, until?, exclude_replies?, exclude_retweets?, verified_only?, media_only?}` |
+| POST | `/tweet` | `{text, reply_to?, media_ids?}` |
+| POST | `/media` | `{file_path, media_type}` |
+| POST | `/like` | `{tweet_id}` |
+| POST | `/delete` | `{tweet_id}` |
+| POST | `/pain` | `{keyword, limit?, min_score?, lang?, min_faves?, min_retweets?, min_followers?, location?, since?, until?}` |
+| POST | `/refresh` | Force cookie re-grab |
+| POST | `/login` | Open login UI |
+| POST | `/account/switch` | `{username}` |
 
-async def scrape_user(username: str, limit: int = 200):
-    client = RnetTwitterClient()
-    cookies_path = os.environ.get("TWITTER_COOKIES_PATH", "twitter_cookies.json")
-    client.load_cookies(cookies_path)
+Default: `http://127.0.0.1:8765`. Override with `TWITTER_SCRAPE_HOST` / `TWITTER_SCRAPE_PORT`.
 
-    # Get user profile
-    user = await client.get_user_by_screen_name(username)
+## Files
 
-    # Get tweets
-    tweets = await client.get_user_tweets(user["rest_id"], count=limit)
-
-    # Save to JSON
-    output = {
-        "scraped_at": datetime.now().isoformat(),
-        "profile": {
-            "id": user["rest_id"],
-            "username": username,
-            "name": user.get("name", ""),
-            "bio": user.get("description", ""),
-            "followers_count": user.get("followers_count", 0),
-            "following_count": user.get("friends_count", 0),
-        },
-        "tweets": tweets,
-        "tweets_count": len(tweets),
-    }
-
-    output_path = f"storage/twitter/{username}.json"
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w") as f:
-        json.dump(output, f, indent=2, default=str)
-
-    return output_path
-
-# Usage
-asyncio.run(scrape_user("elonmusk", limit=200))
-```
-
----
-
-## Output Format
-
-```json
-{
-  "scraped_at": "2026-01-22T10:30:00",
-  "profile": {
-    "id": "123456789",
-    "username": "example",
-    "name": "Example User",
-    "bio": "...",
-    "followers_count": 1234567,
-    "following_count": 1234
-  },
-  "tweets": [
-    {
-      "id": "1234567890123456789",
-      "text": "Tweet content...",
-      "created_at": "Thu Jan 22 16:45:03 +0000 2026",
-      "likes": 12345,
-      "retweets": 1234,
-      "replies": 567,
-      "views": 1234567,
-      "url": "https://x.com/example/status/1234567890123456789",
-      "is_retweet": false
-    }
-  ],
-  "tweets_count": 200
-}
-```
-
----
-
-## Optional: Database Import
-
-To import scraped tweets into a PostgreSQL/Supabase database:
-
-```sql
-CREATE TABLE twitter_content (
-  id TEXT PRIMARY KEY,
-  username TEXT NOT NULL,
-  text TEXT,
-  created_at TIMESTAMPTZ,
-  likes INTEGER DEFAULT 0,
-  retweets INTEGER DEFAULT 0,
-  replies INTEGER DEFAULT 0,
-  views BIGINT,
-  url TEXT,
-  is_retweet BOOLEAN DEFAULT FALSE,
-  imported_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-```python
-from supabase import create_client
-import os
-
-supabase = create_client(
-    os.environ["SUPABASE_URL"],
-    os.environ["SUPABASE_KEY"]
-)
-
-# Import from scraped JSON
-import json
-data = json.load(open("storage/twitter/example.json"))
-for tweet in data["tweets"]:
-    supabase.table("twitter_content").upsert({
-        "id": tweet["id"],
-        "username": data["profile"]["username"],
-        "text": tweet["text"],
-        "likes": tweet.get("likes", 0),
-        "retweets": tweet.get("retweets", 0),
-        "replies": tweet.get("replies", 0),
-        "views": tweet.get("views"),
-        "url": tweet.get("url"),
-        "is_retweet": tweet.get("is_retweet", False),
-    }).execute()
-```
-
----
-
-## Troubleshooting
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| 403 Forbidden | Cookies expired | Refresh auth_token + ct0 from Chrome |
-| 404 Not Found | GraphQL ID rotated | Re-extract from `abs.twimg.com/.../main.*.js` |
-| User not found | Username wrong/suspended | Check on x.com |
-| Rate limited | Too many requests | Wait 15 minutes |
-
----
-
-## Technical Notes
-
-- **SearchTimeline requires POST** (GET returns 404)
-- **GraphQL endpoint IDs may rotate** — re-extract from Twitter's JS bundle
-- **Rate limits**: ~300 requests/15min window
-- Uses `Emulation.Chrome133` to bypass Cloudflare detection
+- `x` — CLI wrapper (v4, argparse-based, symlinked to `~/.local/bin/x`)
+- `twx.py` — Python SDK (`from twx import Twitter`)
+- `scripts/server.py` — HTTP API + self-healing cookie/session
+- `scripts/rnet_twitter.py` — Async GraphQL client (Cloudflare bypass via rnet)
+- `scripts/pain_miner.py` — Pain mining engine (18 query templates, 3-tier WTP scoring)
+- `scripts/cookie_refresh.py` — 3-tier auth: CDP grab → Playwright auto-login → login flow
+- `scripts/account_manager.py` — Multi-account state, round-robin, persistent cooldowns
+- `scripts/.env` — Account config (ACCOUNT_1_USERNAME=@handle)
+- `scripts/twitter_cookies.json` — Cached auth_token + ct0 (chmod 600)
+- `storage/twitter/` — Scraped data dumps

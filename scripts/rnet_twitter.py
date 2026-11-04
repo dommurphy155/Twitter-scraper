@@ -231,11 +231,27 @@ class RnetTwitterClient:
         except (ValueError, TypeError):
             views = 0
 
+        followers = user_legacy.get("followers_count", 0) or 0
+        location = user_legacy.get("location", "") or ""
+        verified = (
+            user_core.get("is_blue_verified", False)
+            or user_legacy.get("verified", False)
+            or user_legacy.get("is_blue_verified", False)
+        )
+        has_media = bool(
+            legacy.get("extended_entities", {}).get("media")
+            or legacy.get("entities", {}).get("media")
+        )
+
         return {
             "id": legacy.get("id_str", result.get("rest_id", "")),
             "text": legacy.get("full_text", ""),
             "author": screen_name,
             "display_name": display_name,
+            "followers_count": followers,
+            "location": location,
+            "verified": bool(verified),
+            "has_media": has_media,
             "favorite_count": legacy.get("favorite_count", 0),
             "reply_count": legacy.get("reply_count", 0),
             "retweet_count": legacy.get("retweet_count", 0),
@@ -302,30 +318,10 @@ class RnetTwitterClient:
                 tweet_results = item.get("tweet_results", {})
                 result = tweet_results.get("result", {})
 
-                # Handle tweet with visibility results wrapper
-                if result.get("__typename") == "TweetWithVisibilityResults":
-                    result = result.get("tweet", {})
-
-                legacy = result.get("legacy", {})
-                if not legacy:
-                    continue
-
-                core = result.get("core", {})
-                user_legacy = (
-                    core.get("user_results", {})
-                    .get("result", {})
-                    .get("legacy", {})
-                )
-
-                tweets.append({
-                    "id": legacy.get("id_str", result.get("rest_id", "")),
-                    "text": legacy.get("full_text", ""),
-                    "author": user_legacy.get("screen_name", ""),
-                    "favorite_count": legacy.get("favorite_count", 0),
-                    "reply_count": legacy.get("reply_count", 0),
-                    "retweet_count": legacy.get("retweet_count", 0),
-                    "created_at": legacy.get("created_at", ""),
-                })
+                # Use shared parser — fixes engagement metrics
+                tweet = self._parse_tweet(result)
+                if tweet:
+                    tweets.append(tweet)
 
         return tweets
 
@@ -334,31 +330,82 @@ class RnetTwitterClient:
         query: str,
         count: int = 100,
         product: str = "Latest",
+        lang: str | None = None,
+        min_faves: int | None = None,
+        min_retweets: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        exclude_replies: bool = False,
+        exclude_retweets: bool = False,
+        verified_only: bool = False,
+        media_only: bool = False,
+        min_followers: int | None = None,
+        location: str | None = None,
     ) -> list[dict]:
-        """Search Twitter by keyword. Returns list of tweet dicts.
+        """Search Twitter by keyword with structured filters.
+
+        Twitter-native filters (baked into query string):
+            lang, min_faves, min_retweets, since, until,
+            exclude_replies, exclude_retweets, verified_only, media_only
+
+        Post-filters (applied after API response):
+            min_followers, location
 
         Args:
-            query: Search query. Supports Twitter operators:
-                - "OpenClaw lang:en" — language filter
-                - '"exact phrase"' — exact match
-                - "OpenClaw since:2026-01-24 until:2026-02-24" — date range
-                - "OpenClaw min_faves:10" — min likes
-                - "OpenClaw -filter:replies" — exclude replies
-            count: Max tweets to return (will paginate automatically).
-            product: "Latest" (chronological) or "Top" (relevance).
+            query: Search query. Also supports inline operators.
+            count: Max tweets to return (paginates automatically).
+            product: "Latest" or "Top".
+            lang: ISO 639-1 language code (en, zh, ja, ko, fr, de, etc.).
+            min_faves: Minimum likes.
+            min_retweets: Minimum retweets.
+            since: ISO date YYYY-MM-DD or YYYY-MM-DD_HH:MM:SS_UTC.
+            until: ISO date (same format).
+            exclude_replies: Exclude reply tweets.
+            exclude_retweets: Exclude retweets.
+            verified_only: Only verified (blue) accounts.
+            media_only: Only tweets with images/video.
+            min_followers: Minimum follower count (post-filter).
+            location: Profile location substring match, case-insensitive (post-filter).
 
         Returns:
             List of tweet dicts with: id, text, author, display_name,
+            followers_count, location, verified, has_media,
             favorite_count, reply_count, retweet_count, views, created_at,
             url, is_reply, is_quote.
         """
+        # Build the query string with native Twitter operators
+        parts = [query]
+
+        if lang:
+            parts.append(f"lang:{lang}")
+        if min_faves:
+            parts.append(f"min_faves:{min_faves}")
+        if min_retweets:
+            parts.append(f"min_retweets:{min_retweets}")
+        if since:
+            parts.append(f"since:{since}")
+        if until:
+            parts.append(f"until:{until}")
+        if exclude_replies:
+            parts.append("-filter:replies")
+        if exclude_retweets:
+            parts.append("-filter:retweets")
+        if verified_only:
+            parts.append("filter:verified")
+        if media_only:
+            parts.append("filter:media")
+
+        full_query = " ".join(parts)
+
         tweets: list[dict] = []
         cursor: str | None = None
         per_page = min(count, 20)
+        # Fetch extra to account for post-filter drops
+        fetch_target = count * 3 if (min_followers or location) else count
 
-        while len(tweets) < count:
+        while len(tweets) < fetch_target:
             variables: dict = {
-                "rawQuery": query,
+                "rawQuery": full_query,
                 "count": per_page,
                 "querySource": "typed_query",
                 "product": product,
@@ -366,7 +413,6 @@ class RnetTwitterClient:
             if cursor is not None:
                 variables["cursor"] = cursor
 
-            # SearchTimeline requires POST (GET returns 404)
             data = await self._gql_post(
                 "SearchTimeline", variables, FEATURES
             )
@@ -385,7 +431,6 @@ class RnetTwitterClient:
             for instruction in instructions:
                 inst_type = instruction.get("type", "")
 
-                # Page 1+: cursor comes in TimelineReplaceEntry
                 if inst_type == "TimelineReplaceEntry":
                     entry = instruction.get("entry", {})
                     eid = entry.get("entryId", "")
@@ -393,13 +438,11 @@ class RnetTwitterClient:
                         new_cursor = entry.get("content", {}).get("value")
                     continue
 
-                # Page 0: entries include tweets and cursors
                 entries = instruction.get("entries", [])
                 for entry in entries:
                     eid = entry.get("entryId", "")
                     content = entry.get("content", {})
 
-                    # Cursor entries
                     if "cursor-bottom" in eid:
                         new_cursor = content.get("value")
                         continue
@@ -413,36 +456,23 @@ class RnetTwitterClient:
                         tweets.append(tweet)
                         batch_count += 1
 
-            # Stop if no new tweets or no cursor
             if batch_count == 0 or new_cursor is None:
                 break
 
             cursor = new_cursor
 
+        # ── Post-filters (not supported natively by Twitter GraphQL) ────
+        if min_followers is not None:
+            tweets = [t for t in tweets if t.get("followers_count", 0) >= min_followers]
+
+        if location:
+            loc_lower = location.lower()
+            tweets = [
+                t for t in tweets
+                if loc_lower in (t.get("location", "") or "").lower()
+            ]
+
         return tweets[:count]
-
-    async def create_tweet(
-        self,
-        text: str,
-        reply_to: str | None = None,
-    ) -> dict:
-        """Create a tweet or reply."""
-        variables: dict = {
-            "tweet_text": text,
-            "dark_request": False,
-            "media": {
-                "media_entities": [],
-                "possibly_sensitive": False,
-            },
-            "semantic_annotation_ids": [],
-        }
-        if reply_to is not None:
-            variables["reply"] = {
-                "in_reply_to_tweet_id": reply_to,
-                "exclude_reply_user_ids": [],
-            }
-
-        return await self._gql_post("CreateTweet", variables, FEATURES)
 
     async def favorite_tweet(self, tweet_id: str) -> dict:
         """Like a tweet."""
@@ -461,3 +491,143 @@ class RnetTwitterClient:
             return result["data"]["create_tweet"]["tweet_results"]["result"]["rest_id"]
         except (KeyError, TypeError):
             return None
+
+    # ── Media upload ──────────────────────────────────────────────────
+
+    async def upload_media(
+        self, file_path: str, media_type: str = "image"
+    ) -> str | None:
+        """Upload an image or video. Returns media_id for use in create_tweet."""
+        import mimetypes
+        from pathlib import Path
+
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Media file not found: {file_path}")
+
+        total_bytes = path.stat().st_size
+        mime_type = mimetypes.guess_type(file_path)[0] or (
+            "video/mp4" if media_type == "video" else "image/jpeg"
+        )
+        media_category = (
+            "tweet_video" if media_type == "video"
+            else "tweet_gif" if mime_type == "image/gif"
+            else "tweet_image"
+        )
+
+        # Step 1: INIT — get media_id
+        init_data = {
+            "command": "INIT",
+            "total_bytes": total_bytes,
+            "media_type": mime_type,
+            "media_category": media_category,
+        }
+        init_resp = await self._rnet.post(
+            "https://upload.twitter.com/1.1/media/upload.json",
+            headers={
+                **self._base_headers,
+                "content-type": "application/x-www-form-urlencoded",
+            },
+            data=init_data,
+        )
+        if init_resp.status not in (200, 202):
+            text = await init_resp.text()
+            raise TwitterAPIError(init_resp.status, f"Media INIT failed: {text[:300]}")
+
+        init_json = json.loads(await init_resp.text())
+        media_id = init_json.get("media_id_string")
+        if not media_id:
+            raise TwitterAPIError(500, f"No media_id in INIT response: {init_json}")
+
+        # Step 2: APPEND — upload the bytes in chunks
+        chunk_size = 4 * 1024 * 1024  # 4MB chunks
+        segment_index = 0
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                append_data = {
+                    "command": "APPEND",
+                    "media_id": media_id,
+                    "segment_index": str(segment_index),
+                }
+                resp = await self._rnet.post(
+                    "https://upload.twitter.com/1.1/media/upload.json",
+                    headers={
+                        **self._base_headers,
+                        "content-type": "multipart/form-data",
+                    },
+                    data=append_data,
+                    files={"media": chunk},
+                )
+                if resp.status not in (200, 202, 204):
+                    text = await resp.text()
+                    raise TwitterAPIError(resp.status, f"Media APPEND failed: {text[:300]}")
+                segment_index += 1
+
+        # Step 3: FINALIZE
+        finalize_data = {
+            "command": "FINALIZE",
+            "media_id": media_id,
+        }
+        finalize_resp = await self._rnet.post(
+            "https://upload.twitter.com/1.1/media/upload.json",
+            headers={
+                **self._base_headers,
+                "content-type": "application/x-www-form-urlencoded",
+            },
+            data=finalize_data,
+        )
+        if finalize_resp.status not in (200, 202, 204):
+            text = await finalize_resp.text()
+            raise TwitterAPIError(finalize_resp.status, f"Media FINALIZE failed: {text[:300]}")
+
+        # For videos, wait for processing
+        if media_type == "video":
+            import asyncio
+            for _ in range(30):
+                await asyncio.sleep(1)
+                status_resp = await self._rnet.get(
+                    f"https://upload.twitter.com/1.1/media/upload.json?command=STATUS&media_id={media_id}",
+                    headers=self._base_headers,
+                )
+                if status_resp.status == 200:
+                    status_json = json.loads(await status_resp.text())
+                    state = status_json.get("processing_info", {}).get("state", "succeeded")
+                    if state == "succeeded":
+                        break
+                    if state == "failed":
+                        raise TwitterAPIError(500, f"Video processing failed: {status_json}")
+
+        return media_id
+
+    async def create_tweet(
+        self,
+        text: str,
+        reply_to: str | None = None,
+        media_ids: list[str] | None = None,
+    ) -> dict:
+        """Create a tweet or reply, optionally with media attachments."""
+        media_entities = []
+        if media_ids:
+            media_entities = [
+                {"media_id": mid, "tagged_users": []} for mid in media_ids
+            ]
+
+        variables: dict = {
+            "tweet_text": text,
+            "dark_request": False,
+            "media": {
+                "media_entities": media_entities,
+                "possibly_sensitive": False,
+            },
+            "semantic_annotation_ids": [],
+        }
+        if reply_to is not None:
+            variables["reply"] = {
+                "in_reply_to_tweet_id": reply_to,
+                "exclude_reply_user_ids": [],
+            }
+
+        return await self._gql_post("CreateTweet", variables, FEATURES)

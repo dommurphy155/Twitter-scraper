@@ -13,27 +13,38 @@ venv/
 env/
 ENV/
 
-# Cookies and credentials (sensitive!)
-twitter_cookies.json
-*.cookies.json
+# ── Secrets & credentials (NEVER commit) ─────────────────────────────
+.env
+scripts/.env
 .twitter_config.json
+.twitter_config.example.json
+*.cookies.json
+scripts/twitter_cookies.json
+scripts/yt_cookies.json
 login_error.png
 
-# Storage (scraped data)
-storage/twitter/*.json
+# ── Browser profiles & runtime state ─────────────────────────────────
+scripts/.chrome-profile/
+scripts/.debug-port
+scripts/__pycache__/
+state/
+storage/
 
-# IDE
+# ── YouTube uploader / attestation tooling (separate project, not shipped)
+scripts/yt_*.py
+scripts/youtube_uploader*.py
+scripts/botguard_*.js
+
+# ── IDE / OS ─────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Backup files
+# ── Backups ──────────────────────────────────────────────────────────
 *.bak
 *.bak*
 *.backup
