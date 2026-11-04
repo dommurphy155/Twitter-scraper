@@ -107,3 +107,47 @@ You should see `ready — you are logged in and ready to post, search, and mine`
 ### Raw HTTP
 
 Default `http://127.0.0.1:8765`. Endpoints: `GET /health`, `GET /session`, `GET /account/status`, `POST /user`, `POST /search`, `POST /tweet`, `POST /like`, `POST /delete`, `POST /media`, `POST /refresh`, `POST /login`, `POST /grok/chat`, `POST /account/switch`. Python SDK: `from twx import Twitter`.
+
+## Agent Setup
+
+Any agent can set this up anywhere on any machine. Two paths:
+
+### Path A — One-liner (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dommurphy155/Twitter-scraper/main/install.sh | bash
+```
+
+That clones the repo, creates a venv, installs `rnet` + `playwright` + `httpx`, installs Playwright Chromium, attaches to (or spawns) a Chrome session on `:9222`, walks you through the x.com login, installs the systemd service if you have sudo, and symlinks `x` into `~/.local/bin`.
+
+### Path B — Manual
+
+```bash
+git clone https://github.com/dommurphy155/Twitter-scraper.git
+cd Twitter-scraper
+python3 scripts/setup_wizard.py      # interactive: venv, deps, Chrome, login, systemd
+```
+
+### What the user must do
+
+1. **Log into x.com.** The scraper needs a real Chrome session — it grabs `auth_token` + `ct0` cookies via CDP from your browser. No API key, no password stored. If your Chrome isn't already logged in, the wizard opens the login tab and waits for you.
+2. **Keep Chrome alive.** The session persists in `scripts/.chrome-profile/`. Reboots are fine — the server re-attaches on startup. If Chrome is killed, the server spawns its own headless Chromium and re-auths.
+3. **Add accounts (optional).** Edit `scripts/.env`:
+   ```
+   ACCOUNT_1_USERNAME=@yourhandle
+   ACCOUNT_2_USERNAME=@secondaccount
+   ```
+   Needed for Grok rate-limit rotation. Without it, `x accounts` shows "no accounts configured".
+4. **Override defaults (optional).** `TWITTER_SCRAPE_HOST` / `TWITTER_SCRAPE_PORT` env vars change the HTTP endpoint (default `127.0.0.1:8765`). `TWITTER_SCRAPE_NO_AUTO_CHROME=1` disables auto-spawn.
+
+### Verify it works
+
+```bash
+x status
+```
+
+You should see `ready — you are logged in and ready to post, search, and mine`.
+
+### Raw HTTP
+
+Default `http://127.0.0.1:8765`. Endpoints: `GET /health`, `GET /session`, `GET /account/status`, `POST /user`, `POST /search`, `POST /tweet`, `POST /like`, `POST /delete`, `POST /media`, `POST /refresh`, `POST /login`, `POST /grok/chat`, `POST /account/switch`. Python SDK: `from twx import Twitter`.
